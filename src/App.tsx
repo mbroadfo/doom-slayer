@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { decompressFrames, parseGIF, type ParsedFrame } from "gifuct-js";
 import {
-  Activity, AudioLines, CircleHelp, Crosshair, Expand, Gamepad2, Gauge,
+  Activity, AudioLines, CircleHelp, Crosshair, Gamepad2, Gauge,
   GitBranch, HeartPulse, Pause, Play, RotateCcw, Zap,
 } from "lucide-react";
 
@@ -39,6 +40,120 @@ const stages = [
   ["VIZDOOM", "35 ticks / sec", "neutral"],
 ];
 
+const VIZDOOM_REFERENCE_FEED = "https://raw.githubusercontent.com/Farama-Foundation/ViZDoom/main/docs/_static/img/vizdoom-demo.gif";
+
+const SPEED_OPTIONS = [0.5, 1, 2, 4] as const;
+
+function ReferenceObservation({ showDepth, showLabels, speed, running }: { showDepth: boolean; showLabels: boolean; speed: number; running: boolean }) {
+  const gameplayCanvas = useRef<HTMLCanvasElement>(null);
+  const labelsCanvas = useRef<HTMLCanvasElement>(null);
+  const depthCanvas = useRef<HTMLCanvasElement>(null);
+  const settings = useRef({ showDepth, showLabels, speed, running });
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    settings.current = { showDepth, showLabels, speed, running };
+  }, [showDepth, showLabels, speed, running]);
+
+  useEffect(() => {
+    let disposed = false;
+    let frameTimer = 0;
+    let frames: ParsedFrame[] = [];
+    let frameIndex = 0;
+    let priorFrame: ParsedFrame | undefined;
+    let priorRestore: ImageData | undefined;
+    const controller = new AbortController();
+    const composite = document.createElement("canvas");
+    const compositeContext = composite.getContext("2d", { willReadFrequently: true });
+    const patchCanvas = document.createElement("canvas");
+    const patchContext = patchCanvas.getContext("2d");
+    let remainingDelay = 0;
+    let lastTime = 0;
+
+    const drawPane = (canvas: HTMLCanvasElement | null, paneIndex: number, paneWidth: number, paneHeight: number) => {
+      if (!canvas || !compositeContext) return;
+      if (canvas.width !== paneWidth || canvas.height !== paneHeight) {
+        canvas.width = paneWidth;
+        canvas.height = paneHeight;
+      }
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.clearRect(0, 0, paneWidth, paneHeight);
+      context.drawImage(composite, paneIndex * paneWidth, 0, paneWidth, paneHeight, 0, 0, paneWidth, paneHeight);
+    };
+
+    const renderNextFrame = (now: number) => {
+      if (disposed || !compositeContext || !patchContext || frames.length === 0) return;
+      const delta = lastTime ? Math.min(now - lastTime, 250) : 0;
+      lastTime = now;
+      if (settings.current.running) remainingDelay -= delta * settings.current.speed;
+      while (!priorFrame || (settings.current.running && remainingDelay <= 0)) {
+        const frame = frames[frameIndex];
+
+        if (priorFrame?.disposalType === 2) {
+          compositeContext.clearRect(priorFrame.dims.left, priorFrame.dims.top, priorFrame.dims.width, priorFrame.dims.height);
+        } else if (priorFrame?.disposalType === 3 && priorRestore) {
+          compositeContext.putImageData(priorRestore, 0, 0);
+        }
+
+        const restoreForFrame = frame.disposalType === 3
+          ? compositeContext.getImageData(0, 0, composite.width, composite.height)
+          : undefined;
+        const patch = new ImageData(frame.patch, frame.dims.width, frame.dims.height);
+        patchCanvas.width = frame.dims.width;
+        patchCanvas.height = frame.dims.height;
+        patchContext.putImageData(patch, 0, 0);
+        compositeContext.drawImage(patchCanvas, frame.dims.left, frame.dims.top);
+
+        priorFrame = frame;
+        priorRestore = restoreForFrame;
+        frameIndex = (frameIndex + 1) % frames.length;
+        remainingDelay += Math.max(20, frame.delay || 100);
+      }
+
+      const paneWidth = Math.floor(composite.width / 4);
+      drawPane(gameplayCanvas.current, 0, paneWidth, composite.height);
+      drawPane(settings.current.showLabels ? labelsCanvas.current : null, 1, paneWidth, composite.height);
+      drawPane(settings.current.showDepth ? depthCanvas.current : null, 2, paneWidth, composite.height);
+
+      frameTimer = window.requestAnimationFrame(renderNextFrame);
+    };
+
+    const loadFrames = async () => {
+      try {
+        const response = await fetch(VIZDOOM_REFERENCE_FEED, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Reference feed request failed: ${response.status}`);
+        const parsed = parseGIF(await response.arrayBuffer());
+        if (disposed) return;
+        composite.width = parsed.lsd.width;
+        composite.height = parsed.lsd.height;
+        frames = decompressFrames(parsed, true);
+        if (frames.length === 0) throw new Error("Reference feed has no frames");
+        setLoadError(false);
+        frameTimer = window.requestAnimationFrame(renderNextFrame);
+      } catch {
+        if (!disposed) setLoadError(true);
+      }
+    };
+
+    void loadFrames();
+    return () => {
+      disposed = true;
+      controller.abort();
+      window.cancelAnimationFrame(frameTimer);
+    };
+  }, []);
+
+  return (
+    <>
+      <canvas className="play-buffer rgb-buffer" ref={gameplayCanvas} role="img" aria-label="Gameplay reference frame" />
+      {showLabels && <canvas className="play-buffer labels-overlay" ref={labelsCanvas} role="img" aria-label="Synchronized object-label buffer overlay" />}
+      {showDepth && <canvas className="play-buffer depth-overlay" ref={depthCanvas} role="img" aria-label="Synchronized grayscale depth buffer overlay" />}
+      {loadError && <span className="buffer-error">REFERENCE FEED COULD NOT LOAD</span>}
+    </>
+  );
+}
+
 function DecisionCard({ decision }: { decision: Decision }) {
   const maxScore = Math.max(...decision.options.map((option) => option.score));
   return (
@@ -68,19 +183,34 @@ function App() {
   const [elapsed, setElapsed] = useState(314.8);
   const [tick, setTick] = useState(0);
   const [scenario, setScenario] = useState("MAP01 · CENTRAL PROCESSING");
+  const [showDepth, setShowDepth] = useState(false);
+  const [showLabels, setShowLabels] = useState(false);
+  const [speed, setSpeed] = useState<number>(1);
   const decisions = decisionSets[tick % decisionSets.length];
 
   useEffect(() => {
     if (!running) return;
     const timer = window.setInterval(() => {
-      setElapsed((value) => value + .2);
+      setElapsed((value) => value + 1);
       setTick((value) => value + 1);
-    }, 2200);
+    }, 1000 / speed);
     return () => window.clearInterval(timer);
-  }, [running]);
+  }, [running, speed]);
 
   const restart = () => { setElapsed(0); setTick(0); setRunning(true); };
   const clock = `${Math.floor(elapsed / 60).toString().padStart(2, "0")}:${Math.floor(elapsed % 60).toString().padStart(2, "0")}`;
+  const route = [
+    { x: 155, y: 326 }, { x: 155, y: 250 }, { x: 325, y: 250 },
+    { x: 325, y: 158 }, { x: 585, y: 158 }, { x: 585, y: 286 },
+    { x: 825, y: 286 }, { x: 825, y: 145 }, { x: 1115, y: 145 },
+    { x: 1115, y: 248 }, { x: 1280, y: 248 },
+  ];
+  const routeIndex = tick % route.length;
+  const trail = route.slice(0, routeIndex + 1);
+  const trailPath = trail.map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`).join(" ");
+  const mapPlayer = route[routeIndex];
+  const mapEnemyOne = { x: 680 + (tick % 6) * 16, y: 202 - (tick % 3) * 12 };
+  const mapEnemyTwo = { x: 1000 - (tick % 5) * 13, y: 314 + (tick % 4) * 8 };
 
   return (
     <main className="shell">
@@ -103,18 +233,19 @@ function App() {
 
       <section className="dashboard-grid" id="dashboard">
         <section className="viewport panel">
-          <div className="section-head"><div className="section-title"><Gamepad2 size={14} /> OBSERVATION FEEDS <span className="feed-tag">FOUR VIZDOOM VIEWS · REFERENCE</span></div><button className="icon-btn" title="Expand viewport" aria-label="Expand viewport"><Expand size={14} /></button></div>
-          <div className="game-screen multiview" aria-label="Four ViZDoom reference observation views">
-            {(["GAMEPLAY", "LABEL BUFFER", "DEPTH BUFFER", "AUTOMAP"] as const).map((label, index) => (
-              <figure className="feed-tile" key={label}>
-                <img
-                  src="https://raw.githubusercontent.com/Farama-Foundation/ViZDoom/main/docs/_static/img/vizdoom-demo.gif"
-                  alt={`ViZDoom ${label.toLowerCase()} reference pane`}
-                  style={{ transform: `translateX(-${index * 25}%)` }}
-                />
-                <figcaption><span>0{index + 1}</span>{label}</figcaption>
-              </figure>
-            ))}
+          <div className="section-head gameplay-head"><div className="section-title"><Gamepad2 size={14} /> GAMEPLAY <span className="feed-tag">RGB · REFERENCE</span></div><div className="overlay-controls" aria-label="Gameplay controls">
+            <button className={showLabels ? "overlay-toggle active" : "overlay-toggle"} aria-pressed={showLabels} title="Overlay object label buffer on gameplay" onClick={() => setShowLabels((value) => !value)}>LABELS</button>
+            <button className={showDepth ? "overlay-toggle active" : "overlay-toggle"} aria-pressed={showDepth} title="Overlay grayscale distance buffer on gameplay" onClick={() => setShowDepth((value) => !value)}>DEPTH</button>
+            <div className="playback-controls" role="group" aria-label="Demo playback speed">
+              {SPEED_OPTIONS.map((rate) => (
+                <button key={rate} className={speed === rate ? "overlay-toggle active" : "overlay-toggle"} aria-pressed={speed === rate} title={`Playback speed ${rate}×`} onClick={() => setSpeed(rate)}>{rate}×</button>
+              ))}
+            </div>
+          </div></div>
+          <div className="game-screen play-screen" aria-label="Gameplay frame with optional aligned observation buffers">
+            <ReferenceObservation showDepth={showDepth} showLabels={showLabels} speed={speed} running={running} />
+            {showLabels && <span className="overlay-status labels-status">LABEL BUFFER OVERLAY · REFERENCE</span>}
+            {showDepth && <span className="overlay-status depth-status">DEPTH BUFFER · DISTANCE, NOT FOG</span>}
           </div>
           <div className="feed-footer">
             <div className="goal"><small>ACTIVE GOAL</small><b><Crosshair size={11} /> ATTACKING ENEMIES</b><i>FOCUS: CACODEMON A</i></div>
@@ -133,6 +264,26 @@ function App() {
           <div className="calibration"><i /> LOCAL QWEN SCORES ARE RAW, NOT CALIBRATED CONFIDENCE</div>
           <div className="situation"><div><span>+/-</span> SITUATION REPORT <small>UPDATED {tick % 3 + 1}s AGO</small></div><p>Player holding position while aligning on cacodemon A. Threat at close range; shotgun loaded. Armor stable.</p></div>
         </aside>
+      </section>
+
+      <section className="map-panel panel">
+        <div className="section-head"><div className="section-title"><Crosshair size={14} /> AUTOMAP / SPATIAL TRACE <span className="active-count">FULL LEVEL VIEW</span></div><span className="trace"><i /> DEMO MAP · NOT LIVE</span></div>
+        <div className="map-canvas">
+          <svg viewBox="0 0 1400 390" role="img" aria-label="Wide dynamic schematic map with player trail, enemy pins, supplies, and exit">
+            <path className="map-rooms" d="M54 58H276V154H54ZM276 88H424V154H276ZM424 45H650V154H424ZM54 154H424V272H54ZM424 154H650V272H424ZM650 80H866V190H650ZM650 190H866V314H650ZM866 104H1074V224H866ZM866 224H1074V330H866ZM1074 138H1340V286H1074ZM252 272H650V356H252Z" />
+            <path className="map-corridors" d="M276 120H424M650 120H720V135H866M650 235H760V278H866M1074 188H1165" />
+            <path className="map-route-base" d="M155 326V250H325V158H585V286H825V145H1115V248H1280" />
+            <path className="map-route-active" d={trailPath} />
+            <g className="map-player-marker" transform={`translate(${mapPlayer.x} ${mapPlayer.y})`}><circle r="12"/><path d="M0-21L-7-5H7Z"/></g>
+            <g className="map-enemy-marker" transform={`translate(${mapEnemyOne.x} ${mapEnemyOne.y})`}><circle r="9"/><path d="M-16 0H16M0-16V16"/><text x="20" y="-8">CACODEMON A</text></g>
+            <g className="map-enemy-marker" transform={`translate(${mapEnemyTwo.x} ${mapEnemyTwo.y})`}><circle r="8"/><path d="M-14 0H14M0-14V14"/><text x="19" y="-7">IMP B</text></g>
+            <g className="map-pickup-marker" transform="translate(535 195)"><rect x="-7" y="-7" width="14" height="14"/><text x="13" y="5">ARMOR</text></g>
+            <g className="map-pickup-marker" transform="translate(937 274)"><rect x="-6" y="-6" width="12" height="12"/><text x="12" y="5">AMMO</text></g>
+            <g className="map-exit-marker" transform="translate(1280 248)"><path d="M0-15L15 0L0 15L-15 0Z"/><text x="22" y="5">EXIT</text></g>
+            <text className="map-room-name" x="110" y="110">ENTRY</text><text className="map-room-name" x="492" y="104">PROCESSING</text><text className="map-room-name" x="714" y="151">NORTH HALL</text><text className="map-room-name" x="300" y="323">CENTRAL HUB</text><text className="map-room-name" x="1130" y="184">EXIT WING</text>
+          </svg>
+          <div className="map-legend"><span><i className="map-key-player"/>PLAYER / TRAIL</span><span><i className="map-key-enemy"/>ENEMIES</span><span><i className="map-key-pickup"/>PICKUPS</span><span><i className="map-key-exit"/>EXIT</span><b>SIMULATED POSITIONS · WAD GEOMETRY NOT CONNECTED</b></div>
+        </div>
       </section>
 
       <section className="trace-panel panel">

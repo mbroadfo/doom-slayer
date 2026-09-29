@@ -35,12 +35,17 @@
 .section-head { height: 39px; flex: 0 0 39px; }
 .section-title { font-size: 10px; }
 .feed-tag, .active-count { font-size: 7px; }
-.viewport .game-screen { flex: 1 1 auto; width: 100%; min-height: 0; aspect-ratio: 4 / 3; overflow: hidden; }
-.game-screen.multiview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 3px; background: #050705; }
-.feed-tile { position: relative; min-width: 0; min-height: 0; overflow: hidden; margin: 0; border: 1px solid #27362a; background: #050705; }
-.feed-tile img { position: absolute; top: 0; left: 0; display: block; width: 400%; max-width: none; height: 100%; object-fit: fill; }
-.feed-tile figcaption { position: absolute; right: 0; bottom: 0; left: 0; display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 3px 7px; border-top: 1px solid #47604b; background: #080d0bdc; color: #c5d3c7; font: 8px 'DM Mono', monospace; }
-.feed-tile figcaption span { color: var(--green); }
+.viewport .play-screen { position: relative; flex: 0 0 auto; width: 100%; min-height: 0; aspect-ratio: 4 / 3; overflow: hidden; background: #050705; }
+.play-buffer { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; object-fit: fill; }
+.rgb-buffer { z-index: 0; transform: translateX(0); }
+.labels-overlay { z-index: 1; mix-blend-mode: screen; opacity: .72; filter: grayscale(1) contrast(2.1) brightness(1.45); }
+.depth-overlay { z-index: 2; mix-blend-mode: screen; opacity: .62; filter: grayscale(1) contrast(1.3); }
+.overlay-controls { display: flex; align-items: center; gap: 5px; }
+.overlay-toggle { min-height: 25px; padding: 0 8px; border: 1px solid #344438; background: #0a100c; color: #a3b2a5; font: 8px 'DM Mono', monospace; cursor: pointer; }
+.overlay-toggle:hover { border-color: #4f875c; color: #dce8dd; }
+.overlay-toggle.active { border-color: #58bf70; background: #14251a; color: #7ef196; box-shadow: inset 0 -2px #58bf70; }
+.overlay-status { position: absolute; z-index: 3; top: 8px; left: 8px; padding: 4px 6px; border: 1px solid #587260; background: #07110dd9; color: #e1eee3; font: 8px 'DM Mono', monospace; pointer-events: none; }
+.depth-status { top: auto; bottom: 8px; }
 .screen-shade { pointer-events: none; }
 .feed-footer { min-height: 50px; padding: 6px 9px; }
 .goal { grid-template-columns: 1fr; gap: 3px; }
@@ -69,6 +74,34 @@
 .situation { flex: 0 0 auto; margin: 7px 9px 8px; }
 .situation > div { padding: 6px 8px 4px; font-size: 8px; }
 .situation p { padding: 0 8px 7px; font-size: 9px; line-height: 1.4; }
+
+.gameplay-head { height: auto; min-height: 39px; flex-basis: auto; flex-wrap: wrap; gap: 8px; padding-top: 7px; padding-bottom: 7px; }
+.gameplay-head .overlay-controls { flex-wrap: wrap; }
+.playback-controls { display: flex; align-items: center; gap: 5px; margin-left: 3px; padding-left: 8px; border-left: 1px solid #26392b; }
+.playback-controls button:focus-visible { outline: 2px solid #66f48e; outline-offset: 2px; }
+.map-panel { width: 100%; margin-top: 11px; }
+.map-canvas { position: relative; height: clamp(270px, 34vw, 430px); min-height: 250px; overflow: hidden; background-color: #070b08; background-image: radial-gradient(#26392b .8px, transparent .8px); background-size: 14px 14px; }
+.map-canvas > svg { display: block; width: 100%; height: 100%; }
+.map-rooms { fill: #0c1510; stroke: #52c36d; stroke-width: 3; stroke-linejoin: round; }
+.map-corridors { fill: none; stroke: #477f51; stroke-width: 3; }
+.map-route-base { fill: none; stroke: #2d5937; stroke-width: 3; stroke-dasharray: 4 7; }
+.map-route-active { fill: none; stroke: #c4a6ff; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 5px #b28aff99); }
+.map-player-marker circle { fill: #e8f3e9; stroke: #66f48e; stroke-width: 4; }
+.map-player-marker path { fill: #66f48e; }
+.map-enemy-marker circle { fill: #ee6558; stroke: #ffd1c8; stroke-width: 2; }
+.map-enemy-marker > path { fill: none; stroke: #ee6558; stroke-width: 2; }
+.map-enemy-marker text, .map-pickup-marker text, .map-exit-marker text { fill: #e8eee8; font: 13px 'DM Mono', monospace; paint-order: stroke; stroke: #070b08; stroke-width: 4px; }
+.map-pickup-marker rect { fill: #e0bd62; stroke: #fff0af; stroke-width: 2; }
+.map-exit-marker path { fill: #0d1710; stroke: #66f48e; stroke-width: 4; }
+.map-room-name { fill: #67856e; font: 12px 'DM Mono', monospace; letter-spacing: 1px; }
+.map-legend { position: absolute; right: 13px; bottom: 10px; left: 13px; display: flex; align-items: center; gap: 18px; color: #c1cbc2; font: 9px 'DM Mono', monospace; text-shadow: 0 1px 3px #000; }
+.map-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.map-legend i { width: 10px; height: 10px; display: inline-block; border: 1px solid #eee; }
+.map-legend .map-key-player { border-radius: 50%; border-color: #66f48e; background: #66f48e; }
+.map-legend .map-key-enemy { border-radius: 50%; border-color: #ee6558; background: #ee6558; }
+.map-legend .map-key-pickup { border-color: #e0bd62; background: #e0bd62; }
+.map-legend .map-key-exit { border-color: #66f48e; transform: rotate(45deg); }
+.map-legend b { margin-left: auto; color: #e0bd62; font-size: 8px; font-weight: 400; white-space: nowrap; }
 
 .trace-panel {
   grid-column: auto;
@@ -111,7 +144,7 @@ footer { margin-top: 10px; font-size: 7px; }
   .topbar, .mission, .dashboard-grid, .trace-panel { margin-bottom: 8px; }
   .topbar { padding: 0 7px; }
   .dashboard-grid { grid-template-columns: minmax(0, 1fr); gap: 9px; }
-  .viewport .game-screen { flex: none; aspect-ratio: 4 / 3; }
+  .viewport .play-screen { flex: none; aspect-ratio: 4 / 3; }
   .feed-footer { grid-template-columns: minmax(0, 1fr) auto; }
   .scenario { display: none; }
   .decisions { max-height: 590px; }

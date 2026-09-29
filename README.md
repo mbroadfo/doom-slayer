@@ -10,9 +10,11 @@ The intended controller uses a slower strategic LLM to choose a goal and target,
 
 ## Observation viewport
 
-The left viewport shows the four panes from ViZDoom's reference feed in a 2x2 mosaic: rendered gameplay, object-label/segmentation view, depth view, and automap. Strategy and tactical decisions remain in the right column; the full-width decision graph sits below and the page scrolls to it. The panes are reference footage, not a live game connection.
+Playback speed buttons beside Labels and Depth in the gameplay header select 0.5×, 1×, 2×, or 4× for the decoded reference animation and simulated dashboard updates. At 1×, the episode clock advances one second per second. Pause/resume applies to both; Labels and Depth can still be toggled while paused.
 
-For live capture, ViZDoom exposes `screen_buffer`, `labels_buffer` and label metadata, `depth_buffer`, and `automap_buffer` through `GameState`. Enable `set_labels_buffer_enabled(True)`, `set_depth_buffer_enabled(True)`, and `set_automap_buffer_enabled(True)` before `DoomGame.init()`. The live panes should all come from the same frame so they stay synchronized with decisions.
+The first-person gameplay view is on the left, with independent `Labels` and `Depth` controls. Those buffers share the gameplay image's pixel coordinates, so they are composited as overlays. Strategy and tactical decisions remain in the right column. A full-width top-down map row follows, with the decision graph below it. The current gameplay and overlays use the ViZDoom reference GIF; the map markers and trail are demo data, not a live game connection.
+
+For live capture, ViZDoom exposes `screen_buffer`, `labels_buffer` and label metadata, `depth_buffer`, and `automap_buffer` through `GameState`. Enable `set_labels_buffer_enabled(True)`, `set_depth_buffer_enabled(True)`, and `set_automap_buffer_enabled(True)` before `DoomGame.init()`. Gameplay, labels, and depth should be composited from the same frame; the automap is a separate top-down coordinate view and should receive world-coordinate player/enemy/item markers and the traveled route.
 
 ## Engine and game data
 
