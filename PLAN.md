@@ -11,24 +11,31 @@ ViZDoom process runs underneath, no real game state, no model calls.
 The demo's playback-speed control (0.5x/1x/2x/4x) is over-engineered for what it is — a looping
 GIF viewer. It should be stripped down; it does not need to survive into the real integration.
 
-## Key architectural decision: sync vs async ViZDoom mode
+## Key architectural decision: sync vs throttled sync vs async ViZDoom mode
 
 Wall-clock playback speed is not the mechanism for letting a local Jev model keep pace with the
-game. ViZDoom's own mode setting is:
+game. ViZDoom's own mode setting is the real lever, and there are three distinct modes, not two:
 
-- **Sync mode** (`set_sync(True)` / synchronous `make_action`): the engine blocks until the model
-  returns a decision. No wall clock to race against, so a slow local model isn't penalized versus
-  a fast hosted one. This is a **dev/eval harness**, not a shipped user-facing mode — use it for
-  building and iterating on the strategic LLM and the fast categorical-choice provider, and for
-  generating clean, deterministic training/eval data without latency noise.
-- **Async mode**: the game advances in real time (35 ticks/sec) regardless of model latency. This
-  is the **actual production target** — it's what a live, human-watched dashboard looks like, and
-  the real test of whether local Jev is fast enough to be viable versus needing the hosted
-  fallback.
+- **Sync mode** (`set_sync(True)` / synchronous `make_action`): the engine blocks indefinitely
+  until the model returns a decision. No wall clock to race against, so a slow local model isn't
+  penalized versus a fast hosted one. This is a **dev/eval harness**, not a shipped user-facing
+  mode — use it for building and iterating on the strategic LLM and the fast categorical-choice
+  provider, and for generating clean, deterministic training/eval data without latency noise.
+- **Throttled sync — the desired gameplay mode**: still synchronous (the engine waits for a
+  decision each step, same fairness guarantee as plain sync), but with a bounded/paced wait
+  rather than an unbounded block, so the game reads as continuous slow motion instead of freezing
+  on a hard stall. This is what a human watches during live play: Jev gets a genuinely wider
+  decision window, without an indefinite pause and without racing a real-time clock it can't win.
+  This is the mode the game-speed control (0.5x/1x/2x/4x-style dial) should actually drive once
+  live capture exists — not a demo GIF's frame delay.
+- **Async mode**: the game advances in real time (35 ticks/sec) regardless of model latency. Keep
+  this as a **stress-test mode** — it's the true no-slack condition, useful for confirming whether
+  local Jev could ever survive without any pacing help versus needing the hosted fallback. Not the
+  primary gameplay target; throttled sync is.
 
-Open question to resolve before implementation: whether sync mode ever needs to be exposed in the
-UI (e.g. an "unhurried" play mode) or stays purely internal tooling. Leaning toward internal-only
-unless a concrete use case shows up.
+Open question to resolve before implementation: whether plain (unbounded) sync mode ever needs to
+be exposed in the UI, or stays purely internal dev/training tooling. Leaning toward internal-only.
+Throttled sync, by contrast, should be user-facing — it's the gameplay mode.
 
 ## Provider separation (from README, still holds)
 
@@ -47,7 +54,8 @@ Jev credentials stay backend-only; rapid hosted calls are an explicit opt-in, no
    `set_depth_buffer_enabled`, `set_automap_buffer_enabled` before `DoomGame.init()`. Composite
    gameplay/labels/depth from the same frame; automap gets world-coordinate player/enemy/item
    markers and the traveled route.
-4. Build the sync-mode harness first (dev/training/eval), then the async production loop.
+4. Build the plain sync-mode harness first (dev/training/eval), then throttled sync (the real
+   gameplay mode), then async as a stress-test harness.
 5. Implement the two-stage controller: slower strategic LLM picks goal/target, faster categorical
    provider handles tactical inputs.
 
